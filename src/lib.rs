@@ -120,11 +120,6 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
     }
 }
 
-enum ExtractFormat {
-    Tar,
-    Squashfs,
-}
-
 /// Extracts an image using either unsquashfs or tar.
 pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     archive: P,
@@ -139,29 +134,13 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid directory path"))?
         .replace("'", "'\"'\"'");
 
-    let format = if archive.extension().map_or(false, |ext| ext == "squashfs") {
-        ExtractFormat::Squashfs
-    } else {
-        ExtractFormat::Tar
-    };
-
     let archive = archive
         .to_str()
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid archive path"))?
         .replace("'", "'\"'\"'");
 
-    let mut command = match format {
-        ExtractFormat::Squashfs => {
-            let mut command = Command::new("unsquashfs");
-            command.arg("-f").arg("-d").arg(directory).arg(archive);
-            command
-        }
-        ExtractFormat::Tar => {
-            let mut command = Command::new("tar");
-            command.arg("--overwrite").arg("-xf").arg(archive).arg("-C").arg(directory);
-            command
-        }
-    };
+    let mut command = Command::new("unsquashfs");
+    command.arg("-f").arg("-d").arg(directory).arg(archive);
 
     debug!("{:?}", command);
 
