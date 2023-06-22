@@ -46,8 +46,8 @@ fn getpty(columns: u32, lines: u32) -> (RawFd, String) {
 
     unsafe {
         let size = libc::winsize {
-            ws_row:    lines as libc::c_ushort,
-            ws_col:    columns as libc::c_ushort,
+            ws_row: lines as libc::c_ushort,
+            ws_col: columns as libc::c_ushort,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
@@ -56,7 +56,11 @@ fn getpty(columns: u32, lines: u32) -> (RawFd, String) {
         }
     }
 
-    let tty_path = unsafe { CStr::from_ptr(ptsname(master_fd)).to_string_lossy().into_owned() };
+    let tty_path = unsafe {
+        CStr::from_ptr(ptsname(master_fd))
+            .to_string_lossy()
+            .into_owned()
+    };
     (master_fd, tty_path)
 }
 
@@ -124,6 +128,7 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
 pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     archive: P,
     directory: Q,
+    limit_thread: Option<usize>,
     callback: F,
 ) -> Result<()> {
     let archive = archive.as_ref().canonicalize()?;
@@ -140,6 +145,11 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
         .replace("'", "'\"'\"'");
 
     let mut command = Command::new("unsquashfs");
+
+    if let Some(limit_thread) = limit_thread {
+        command.arg("-p").arg(limit_thread.to_string());
+    }
+
     command.arg("-f").arg("-d").arg(directory).arg(archive);
 
     debug!("{:?}", command);
