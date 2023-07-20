@@ -124,13 +124,20 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
     }
 }
 
-/// Extracts an image using either unsquashfs or tar.
+/// Extracts an image using either unsquashfs.
 pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     archive: P,
     directory: Q,
     limit_thread: Option<usize>,
     callback: F,
 ) -> Result<()> {
+    if which::which("unsquashfs").is_err() {
+        return Err(Error::new(
+            ErrorKind::NotFound,
+            "Unable to find unsquashfs binary.",
+        ));
+    }
+
     let archive = archive.as_ref().canonicalize()?;
     let directory = directory.as_ref().canonicalize()?;
 
