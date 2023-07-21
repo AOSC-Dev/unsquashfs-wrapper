@@ -125,6 +125,19 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
 }
 
 /// Extracts an image using either unsquashfs.
+/// ```rust
+/// fn main() {
+///     unsquashfs_wrapper::extract(
+///         "/home/saki/aosc-os_base_20230322_amd64.squashfs",
+///         "/tmp/test",
+///         None,
+///         move |c| {
+///             dbg!(c);
+///         },
+///     )
+///     .unwrap();
+///}
+/// ```
 pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     archive: P,
     directory: Q,
