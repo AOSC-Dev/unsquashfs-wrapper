@@ -144,12 +144,12 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     let directory = directory
         .to_str()
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid directory path"))?
-        .replace("'", "'\"'\"'");
+        .replace('\'', "'\"'\"'");
 
     let archive = archive
         .to_str()
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid archive path"))?
-        .replace("'", "'\"'\"'");
+        .replace('\'', "'\"'\"'");
 
     let mut command = Command::new("unsquashfs");
 
