@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 9 commits contributed to the release over the course of 546 calendar days.
+ - 10 commits contributed to the release over the course of 546 calendar days.
  - 7 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release unsquashfs-wrapper v0.1.0 ([`58b51ea`](https://github.com/AOSC-Dev/distinst-squashfs/commit/58b51ea5f683eb006d4f466984fb994b0c533548))
     - Add CHANGELOG ([`3902080`](https://github.com/AOSC-Dev/distinst-squashfs/commit/3902080694bb8aa4b9d00590373b63a0b310a3c8))
     - Update all deps ([`d8334a1`](https://github.com/AOSC-Dev/distinst-squashfs/commit/d8334a1e81b9265a9287131b163dd9f3fa7056db))
     - Rename to unsquashfs-wrapper ([`5804762`](https://github.com/AOSC-Dev/distinst-squashfs/commit/580476218a6e8bed2ee2d0539e85ce8a49fc3120))
