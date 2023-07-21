@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.1 (2023-07-21)
+
+### Other
+
+ - <csr-id-751361f8a84210f01b4d1114d53691a1e7f3c8b8/> Improve doc
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 1 commit contributed to the release.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Improve doc ([`751361f`](https://github.com/AOSC-Dev/distinst-squashfs/commit/751361f8a84210f01b4d1114d53691a1e7f3c8b8))
+</details>
+
 ## v0.1.0 (2023-07-21)
 
 <csr-id-d8334a1e81b9265a9287131b163dd9f3fa7056db/>
@@ -38,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 10 commits contributed to the release over the course of 546 calendar days.
+ - 11 commits contributed to the release over the course of 546 calendar days.
  - 7 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -49,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release unsquashfs-wrapper v0.1.0 ([`93adde2`](https://github.com/AOSC-Dev/distinst-squashfs/commit/93adde2a7a5e0ec8a82a12e45ecb713020349994))
     - Release unsquashfs-wrapper v0.1.0 ([`58b51ea`](https://github.com/AOSC-Dev/distinst-squashfs/commit/58b51ea5f683eb006d4f466984fb994b0c533548))
     - Add CHANGELOG ([`3902080`](https://github.com/AOSC-Dev/distinst-squashfs/commit/3902080694bb8aa4b9d00590373b63a0b310a3c8))
     - Update all deps ([`d8334a1`](https://github.com/AOSC-Dev/distinst-squashfs/commit/d8334a1e81b9265a9287131b163dd9f3fa7056db))
