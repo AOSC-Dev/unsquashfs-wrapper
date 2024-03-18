@@ -12,7 +12,14 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     str,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
+    thread,
 };
+
+use rustix::process::{kill_process, Pid, Signal};
 
 fn getpty(columns: u32, lines: u32) -> (RawFd, String) {
     use std::{
@@ -143,6 +150,7 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     directory: Q,
     limit_thread: Option<usize>,
     callback: F,
+    cancel: Arc<AtomicBool>,
 ) -> Result<()> {
     if which::which("unsquashfs").is_err() {
         return Err(Error::new(
@@ -202,13 +210,28 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
         },
     }
 
-    let status = child.wait()?;
-    if status.success() {
+    let pid = Pid::from_child(&child);
+
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || -> Result<()> {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                kill_process(pid, Signal::Term)?;
+                tx.send(()).unwrap();
+            }
+            thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
+
+    let cw = child.wait();
+
+    if child.wait().map(|x| x.success()).unwrap_or(false) || rx.try_recv().is_ok() {
         Ok(())
     } else {
         Err(Error::new(
             ErrorKind::Other,
-            format!("archive extraction failed with status: {}", status),
+            format!("archive extraction failed with status: {}", cw?),
         ))
     }
 }
