@@ -14,7 +14,7 @@ use std::{
     str,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        Arc,
     },
     thread,
 };
@@ -211,22 +211,32 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     }
 
     let pid = Pid::from_child(&child);
-
-    let (tx, rx) = mpsc::channel();
+    let cancel_success = Arc::new(AtomicBool::new(false));
+    let extract_success = Arc::new(AtomicBool::new(false));
+    let es = extract_success.clone();
+    let cs = cancel_success.clone();
 
     thread::spawn(move || -> Result<()> {
         loop {
+            if es.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+
             if cancel.load(Ordering::Relaxed) {
                 kill_process(pid, Signal::Term)?;
-                tx.send(()).unwrap();
+                cs.store(true, Ordering::Relaxed);
+                return Ok(());
             }
             thread::sleep(std::time::Duration::from_millis(100));
         }
     });
 
     let cw = child.wait();
+    let is_success = child.wait().map(|x| x.success()).unwrap_or(false);
+    extract_success.store(is_success, Ordering::Relaxed);
 
-    if child.wait().map(|x| x.success()).unwrap_or(false) || rx.try_recv().is_ok() {
+    if is_success || cancel_success.load(Ordering::Relaxed)
+    {
         Ok(())
     } else {
         Err(Error::new(
