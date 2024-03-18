@@ -1,7 +1,3 @@
-extern crate libc;
-#[macro_use]
-extern crate log;
-
 use std::{
     fs::File,
     io::{Error, ErrorKind, Read, Result},
@@ -20,6 +16,7 @@ use std::{
 };
 
 use rustix::process::{kill_process, Pid, Signal};
+use tracing::{debug, error};
 
 fn getpty(columns: u32, lines: u32) -> (RawFd, String) {
     use std::{
@@ -199,6 +196,28 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
         }
     };
 
+    let pid = Pid::from_child(&child);
+    let cancel_success = Arc::new(AtomicBool::new(false));
+    let extract_success = Arc::new(AtomicBool::new(false));
+    let es = extract_success.clone();
+    let cs = cancel_success.clone();
+
+    thread::spawn(move || -> Result<()> {
+        loop {
+            if es.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+
+            if cancel.load(Ordering::SeqCst) {
+                kill_process(pid, Signal::Term)?;
+                debug!("Canceled");
+                cs.store(true, Ordering::SeqCst);
+                return Ok(());
+            }
+            thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
+
     let master = unsafe { File::from_raw_fd(master_fd) };
     match handle(master, callback) {
         Ok(()) => (),
@@ -210,33 +229,11 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
         },
     }
 
-    let pid = Pid::from_child(&child);
-    let cancel_success = Arc::new(AtomicBool::new(false));
-    let extract_success = Arc::new(AtomicBool::new(false));
-    let es = extract_success.clone();
-    let cs = cancel_success.clone();
-
-    thread::spawn(move || -> Result<()> {
-        loop {
-            if es.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-
-            if cancel.load(Ordering::Relaxed) {
-                kill_process(pid, Signal::Term)?;
-                cs.store(true, Ordering::Relaxed);
-                return Ok(());
-            }
-            thread::sleep(std::time::Duration::from_millis(100));
-        }
-    });
-
     let cw = child.wait();
     let is_success = child.wait().map(|x| x.success()).unwrap_or(false);
-    extract_success.store(is_success, Ordering::Relaxed);
+    extract_success.store(is_success, Ordering::SeqCst);
 
-    if is_success || cancel_success.load(Ordering::Relaxed)
-    {
+    if is_success || cancel_success.load(Ordering::SeqCst) {
         Ok(())
     } else {
         Err(Error::new(
