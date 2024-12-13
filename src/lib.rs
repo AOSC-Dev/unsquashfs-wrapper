@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Error, ErrorKind, Read, Result},
+    io::{self, Error, ErrorKind, Read},
     path::Path,
     process::{ChildStdout, Stdio},
     str,
@@ -11,25 +11,18 @@ use std::{
     time::Duration,
 };
 
-use pty_process::{blocking::Pty, Size};
+use pty_process::{
+    blocking::{Command, Pty},
+    Size,
+};
+use thiserror::Error;
 
-fn handle(mut master: ChildStdout, mut callback: impl FnMut(i32)) -> Result<String> {
+fn handle(mut master: ChildStdout, mut callback: impl FnMut(i32)) -> io::Result<String> {
     let mut last_progress = 0;
     let mut output = String::new();
     loop {
         let mut data = [0; 0x1000];
-        let count = match master.read(&mut data) {
-            Ok(0) => return Ok(output),
-            Ok(c) => c,
-            Err(err) => {
-                return match err.raw_os_error() {
-                    // EIO happens when slave end is closed
-                    Some(libc::EIO) => Ok(output),
-                    // Log other errors, use status code below to return
-                    _ => Err(err),
-                };
-            }
-        };
+        let count = master.read(&mut data)?;
 
         if let Ok(string) = str::from_utf8(&data[..count]) {
             for line in string.split(['\r', '\n']) {
@@ -70,14 +63,28 @@ impl Default for Unsquashfs {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum UnsquashfsError {
+    #[error("`unsquashfs` binary does not exist.")]
+    BinaryDoesNotExist,
+    #[error(transparent)]
+    IO(#[from] io::Error),
+    #[error(transparent)]
+    Pty(#[from] pty_process::Error),
+    #[error("`unsquashfs` is not start.")]
+    Pending,
+    #[error("`unsquashfs` failed: {0}, output: {1}")]
+    Failure(io::Error, String),
+}
+
 impl Unsquashfs {
     pub fn new() -> Self {
         Unsquashfs::default()
     }
 
-    pub fn cancel(&self) -> Result<()> {
+    pub fn cancel(&self) -> Result<(), UnsquashfsError> {
         match *self.status.read().unwrap() {
-            Status::Pending => Err(io::Error::new(ErrorKind::Other, "Unsquashfs is not start.")),
+            Status::Pending => Err(UnsquashfsError::Pending),
             Status::Working => {
                 self.cancel.store(true, Ordering::SeqCst);
                 Ok(())
@@ -92,12 +99,9 @@ impl Unsquashfs {
         directory: impl AsRef<Path>,
         thread: Option<usize>,
         callback: impl FnMut(i32),
-    ) -> Result<()> {
+    ) -> Result<(), UnsquashfsError> {
         if which::which("unsquashfs").is_err() {
-            return Err(Error::new(
-                ErrorKind::NotFound,
-                "Unable to find unsquashfs binary.",
-            ));
+            return Err(UnsquashfsError::BinaryDoesNotExist);
         }
 
         let archive = archive.as_ref().canonicalize()?;
@@ -113,11 +117,10 @@ impl Unsquashfs {
             .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid archive path"))?
             .replace('\'', "'\"'\"'");
 
-        let pty = Pty::new().map_err(|e| io::Error::new(ErrorKind::Other, e))?;
-        pty.resize(Size::new(30, 80))
-            .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+        let pty = Pty::new()?;
+        pty.resize(Size::new(30, 80))?;
 
-        let mut command = pty_process::blocking::Command::new("unsquashfs");
+        let mut command = Command::new("unsquashfs");
 
         if let Some(limit_thread) = thread {
             command.arg("-p").arg(limit_thread.to_string());
@@ -135,21 +138,19 @@ impl Unsquashfs {
             .env("LINES", "")
             .env("TERM", "xterm-256color")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn(&pty.pts().map_err(|e| io::Error::new(ErrorKind::Other, e))?)
-            .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+            .spawn(&pty.pts()?)?;
 
         *self.status.write().unwrap() = Status::Working;
 
         let cc = self.cancel.clone();
         let status_clone = self.status.clone();
 
-        let stdout = child.stdout.take().ok_or(io::Error::new(
-            ErrorKind::BrokenPipe,
-            "Failed to get stdout",
-        ))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::new(ErrorKind::BrokenPipe, "Failed to get stdout"))?;
 
-        let process_control = thread::spawn(move || -> Result<()> {
+        let process_control = thread::spawn(move || -> io::Result<()> {
             loop {
                 let wait = child.try_wait()?;
 
@@ -186,7 +187,7 @@ impl Unsquashfs {
         process_control
             .join()
             .unwrap()
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Output: {}, {e}", output)))?;
+            .map_err(|e| UnsquashfsError::Failure(e, output))?;
 
         Ok(())
     }

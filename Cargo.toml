@@ -10,7 +10,7 @@ keywords = ["squashfs"]
 edition = "2021"
 
 [dependencies]
-libc = "0.2.68"
 which = "7.0"
 tracing = "0.1"
 pty-process = "0.4"
+thiserror = "2"
