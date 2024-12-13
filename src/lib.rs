@@ -1,7 +1,6 @@
 use std::{
     fs::File,
     io::{self, Error, ErrorKind, Read, Result},
-    mem::forget,
     os::unix::{
         io::{AsRawFd, FromRawFd, RawFd},
         process::CommandExt,
@@ -126,7 +125,6 @@ fn handle(mut master: File, mut callback: impl FnMut(i32)) -> Result<String> {
         if let Ok(string) = str::from_utf8(&data[..count]) {
             for line in string.split(['\r', '\n']) {
                 let len = line.len();
-                dbg!(line);
                 if line.starts_with('[') && line.ends_with('%') && len >= 4 {
                     if let Ok(progress) = line[len - 4..len - 1].trim().parse::<i32>() {
                         if last_progress != progress {
@@ -238,10 +236,6 @@ impl Unsquashfs {
             };
 
             *self.status.write().unwrap() = Status::Working;
-
-            forget(slave_stdin);
-            forget(slave_stdout);
-            forget(slave_stderr);
             child
         };
 
@@ -258,8 +252,6 @@ impl Unsquashfs {
                     *status_clone.write().unwrap() = Status::Pending;
                     return Ok(());
                 }
-
-                dbg!(&wait);
 
                 let Some(wait) = wait else {
                     thread::sleep(Duration::from_millis(10));
