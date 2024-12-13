@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-use tracing::{debug, error};
+use tracing::debug;
 
 fn getpty(columns: u32, lines: u32) -> (RawFd, String) {
     use std::{
@@ -105,17 +105,27 @@ fn before_exec() -> Result<()> {
     Ok(())
 }
 
-fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
+fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<String> {
     let mut last_progress = 0;
+    let mut output = String::new();
     loop {
         let mut data = [0; 0x1000];
-        let count = master.read(&mut data)?;
-        if count == 0 {
-            return Ok(());
-        }
+        let count = match master.read(&mut data) {
+            Ok(0) => return Ok(output),
+            Ok(c) => c,
+            Err(err) => {
+                return match err.raw_os_error() {
+                    // EIO happens when slave end is closed
+                    Some(libc::EIO) => Ok(output),
+                    // Log other errors, use status code below to return
+                    _ => Err(err),
+                };
+            }
+        };
         if let Ok(string) = str::from_utf8(&data[..count]) {
             for line in string.split(['\r', '\n']) {
                 let len = line.len();
+                dbg!(line);
                 if line.starts_with('[') && line.ends_with('%') && len >= 4 {
                     if let Ok(progress) = line[len - 4..len - 1].trim().parse::<i32>() {
                         if last_progress != progress {
@@ -123,6 +133,9 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
                             last_progress = progress;
                         }
                     }
+                } else if len != 0 {
+                    output.push_str(line);
+                    output.push('\n');
                 }
             }
         }
@@ -198,7 +211,12 @@ impl Unsquashfs {
             command.arg("-p").arg(limit_thread.to_string());
         }
 
-        command.arg("-f").arg("-d").arg(directory).arg(archive);
+        command
+            .arg("-f")
+            .arg("-q")
+            .arg("-d")
+            .arg(directory)
+            .arg(archive);
 
         debug!("{:?}", command);
 
@@ -227,15 +245,7 @@ impl Unsquashfs {
         };
 
         let master = unsafe { File::from_raw_fd(master_fd) };
-        match handle(master, callback) {
-            Ok(()) => (),
-            Err(err) => match err.raw_os_error() {
-                // EIO happens when slave end is closed
-                Some(libc::EIO) => (),
-                // Log other errors, use status code below to return
-                _ => error!("handle error: {}", err),
-            },
-        }
+        let output = handle(master, callback)?;
 
         loop {
             let wait = child.try_wait()?;
@@ -258,8 +268,9 @@ impl Unsquashfs {
                 return Err(Error::new(
                     ErrorKind::Other,
                     format!(
-                        "archive extraction failed with status: {}",
-                        wait.code().unwrap_or(1)
+                        "archive extraction failed with status: {}\noutput: {}",
+                        wait.code().unwrap_or(1),
+                        output
                     ),
                 ));
             } else {
