@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{Error, ErrorKind, Read, Result},
+    mem::forget,
     os::unix::{
         io::{AsRawFd, FromRawFd, RawFd},
         process::CommandExt,
@@ -186,7 +187,7 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
     let mut child = {
         let (slave_stdin, slave_stdout, slave_stderr) = slave_stdio(&tty_path)?;
 
-        unsafe {
+        let child = unsafe {
             command
                 .stdin(Stdio::from_raw_fd(slave_stdin.as_raw_fd()))
                 .stdout(Stdio::from_raw_fd(slave_stdout.as_raw_fd()))
@@ -196,7 +197,11 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
                 .env("TERM", "xterm-256color")
                 .pre_exec(before_exec)
                 .spawn()?
-        }
+        };
+        forget(slave_stdin);
+        forget(slave_stdout);
+        forget(slave_stderr);
+        child
     };
 
     let pid = Pid::from_child(&child);
