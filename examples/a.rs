@@ -11,9 +11,9 @@ fn main() {
                 "/home/saki/aosc-os_base_20240215_amd64.squashfs",
                 "/test",
                 None,
-                move |c| {
+                Box::new(move |c| {
                     dbg!(c);
-                },
+                }),
             )
             .unwrap();
     });

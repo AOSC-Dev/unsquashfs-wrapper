@@ -105,7 +105,7 @@ fn before_exec() -> Result<()> {
     Ok(())
 }
 
-fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<String> {
+fn handle(mut master: File, mut callback: impl FnMut(i32)) -> Result<String> {
     let mut last_progress = 0;
     let mut output = String::new();
     loop {
@@ -122,6 +122,7 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<String> {
                 };
             }
         };
+
         if let Ok(string) = str::from_utf8(&data[..count]) {
             for line in string.split(['\r', '\n']) {
                 let len = line.len();
@@ -244,39 +245,52 @@ impl Unsquashfs {
             child
         };
 
+        let cc = self.cancel.clone();
+        let status_clone = self.status.clone();
+
+        let process_control = thread::spawn(move || -> Result<()> {
+            loop {
+                let wait = child.try_wait()?;
+
+                if cc.load(Ordering::SeqCst) {
+                    child.kill()?;
+                    cc.store(false, Ordering::SeqCst);
+                    *status_clone.write().unwrap() = Status::Pending;
+                    return Ok(());
+                }
+
+                dbg!(&wait);
+
+                let Some(wait) = wait else {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+
+                *status_clone.write().unwrap() = Status::Pending;
+
+                if !wait.success() {
+                    return Err(Error::new(
+                        ErrorKind::Other,
+                        format!(
+                            "archive extraction failed with status: {}",
+                            wait.code().unwrap_or(1),
+                        ),
+                    ));
+                } else {
+                    return Ok(());
+                }
+            }
+        });
+
         let master = unsafe { File::from_raw_fd(master_fd) };
         let output = handle(master, callback)?;
 
-        loop {
-            let wait = child.try_wait()?;
+        process_control
+            .join()
+            .unwrap()
+            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Output: {}, {e}", output)))?;
 
-            if self.cancel.load(Ordering::SeqCst) {
-                child.kill()?;
-                self.cancel.store(false, Ordering::SeqCst);
-                *self.status.write().unwrap() = Status::Pending;
-                return Ok(());
-            }
-
-            let Some(wait) = wait else {
-                thread::sleep(Duration::from_millis(10));
-                continue;
-            };
-
-            *self.status.write().unwrap() = Status::Pending;
-
-            if !wait.success() {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!(
-                        "archive extraction failed with status: {}\noutput: {}",
-                        wait.code().unwrap_or(1),
-                        output
-                    ),
-                ));
-            } else {
-                return Ok(());
-            }
-        }
+        Ok(())
     }
 }
 
@@ -295,9 +309,14 @@ pub mod test {
             let output = temp_dir().join("unsqfs-wrap-test-extract");
             fs::create_dir_all(&output).unwrap();
             unsquashfs
-                .extract("testdata/test_extract.squashfs", &output, None, move |c| {
-                    dbg!(c);
-                })
+                .extract(
+                    "testdata/test_extract.squashfs",
+                    &output,
+                    None,
+                    Box::new(move |c| {
+                        dbg!(c);
+                    }),
+                )
                 .unwrap();
             fs::remove_dir_all(output).unwrap();
         });
