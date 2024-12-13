@@ -129,162 +129,177 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
     }
 }
 
-/// Extracts an image using either unsquashfs.
-/// ```rust,no_run
-/// use std::sync::Arc;
-/// use std::sync::atomic::AtomicBool;
-/// fn main() {
-///     unsquashfs_wrapper::extract(
-///         "/home/saki/aosc-os_base_20230322_amd64.squashfs",
-///         "/tmp/test",
-///         None,
-///         move |c| {
-///             dbg!(c);
-///         },
-///         Arc::new(AtomicBool::new(false)),
-///     )
-///     .unwrap();
-///}
-/// ```
-pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
-    archive: P,
-    directory: Q,
-    limit_thread: Option<usize>,
-    callback: F,
+#[derive(Clone)]
+pub struct Unsquashfs {
     cancel: Arc<AtomicBool>,
-) -> Result<()> {
-    if which::which("unsquashfs").is_err() {
-        return Err(Error::new(
-            ErrorKind::NotFound,
-            "Unable to find unsquashfs binary.",
-        ));
-    }
+}
 
-    let archive = archive.as_ref().canonicalize()?;
-    let directory = directory.as_ref().canonicalize()?;
-
-    let directory = directory
-        .to_str()
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid directory path"))?
-        .replace('\'', "'\"'\"'");
-
-    let archive = archive
-        .to_str()
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid archive path"))?
-        .replace('\'', "'\"'\"'");
-
-    let mut command = Command::new("unsquashfs");
-
-    if let Some(limit_thread) = limit_thread {
-        command.arg("-p").arg(limit_thread.to_string());
-    }
-
-    command.arg("-f").arg("-d").arg(directory).arg(archive);
-
-    debug!("{:?}", command);
-
-    let (master_fd, tty_path) = getpty(80, 30);
-    let mut child = {
-        let (slave_stdin, slave_stdout, slave_stderr) = slave_stdio(&tty_path)?;
-
-        let child = unsafe {
-            command
-                .stdin(Stdio::from_raw_fd(slave_stdin.as_raw_fd()))
-                .stdout(Stdio::from_raw_fd(slave_stdout.as_raw_fd()))
-                .stderr(Stdio::from_raw_fd(slave_stderr.as_raw_fd()))
-                .env("COLUMNS", "")
-                .env("LINES", "")
-                .env("TERM", "xterm-256color")
-                .pre_exec(before_exec)
-                .spawn()?
-        };
-        forget(slave_stdin);
-        forget(slave_stdout);
-        forget(slave_stderr);
-        child
-    };
-
-    let pid = Pid::from_child(&child);
-    let cancel_success = Arc::new(AtomicBool::new(false));
-    let extract_success = Arc::new(AtomicBool::new(false));
-    let es = extract_success.clone();
-    let cs = cancel_success.clone();
-
-    thread::spawn(move || -> Result<()> {
-        loop {
-            if es.load(Ordering::SeqCst) {
-                return Ok(());
-            }
-
-            if cancel.load(Ordering::SeqCst) {
-                kill_process(pid, Signal::Term)?;
-                debug!("Canceled");
-                cs.store(true, Ordering::SeqCst);
-                return Ok(());
-            }
-            thread::sleep(std::time::Duration::from_millis(100));
+impl Default for Unsquashfs {
+    fn default() -> Self {
+        Self {
+            cancel: Arc::new(AtomicBool::new(false)),
         }
-    });
+    }
+}
 
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    match handle(master, callback) {
-        Ok(()) => (),
-        Err(err) => match err.raw_os_error() {
-            // EIO happens when slave end is closed
-            Some(libc::EIO) => (),
-            // Log other errors, use status code below to return
-            _ => error!("handle error: {}", err),
-        },
+impl Unsquashfs {
+    pub fn new() -> Self {
+        Unsquashfs::default()
     }
 
-    let cw = child.wait();
-    let is_success = child.wait().map(|x| x.success()).unwrap_or(false);
-    extract_success.store(is_success, Ordering::SeqCst);
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
 
-    if is_success || cancel_success.load(Ordering::SeqCst) {
-        Ok(())
-    } else {
-        Err(Error::new(
-            ErrorKind::Other,
-            format!("archive extraction failed with status: {}", cw?),
-        ))
+    /// Extracts an image using either unsquashfs.
+    /// ```rust,no_run
+    ///     let unsquashfs = Unsquashfs::new();
+    /// let unsquashfs_clone = unsquashfs.clone();
+    /// thread::spawn(move || {
+    ///     unsquashfs.extract(
+    ///         "/home/saki/aosc-os_base_20240215_amd64.squashfs",
+    ///         "/test",
+    ///         None,
+    ///         move |c| {
+    ///             dbg!(c);
+    ///         },
+    ///     )
+    ///     .unwrap();
+    /// });
+    // thread::sleep(Duration::from_secs(10));
+    // unsquashfs_clone.cancel();
+    /// ```
+    pub fn extract(
+        &self,
+        archive: impl AsRef<Path>,
+        directory: impl AsRef<Path>,
+        thread: Option<usize>,
+        callback: impl FnMut(i32),
+    ) -> Result<()> {
+        if which::which("unsquashfs").is_err() {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                "Unable to find unsquashfs binary.",
+            ));
+        }
+
+        let archive = archive.as_ref().canonicalize()?;
+        let directory = directory.as_ref().canonicalize()?;
+
+        let directory = directory
+            .to_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid directory path"))?
+            .replace('\'', "'\"'\"'");
+
+        let archive = archive
+            .to_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid archive path"))?
+            .replace('\'', "'\"'\"'");
+
+        let mut command = Command::new("unsquashfs");
+
+        if let Some(limit_thread) = thread {
+            command.arg("-p").arg(limit_thread.to_string());
+        }
+
+        command.arg("-f").arg("-d").arg(directory).arg(archive);
+
+        debug!("{:?}", command);
+
+        let (master_fd, tty_path) = getpty(80, 30);
+        let mut child = {
+            let (slave_stdin, slave_stdout, slave_stderr) = slave_stdio(&tty_path)?;
+
+            let child = unsafe {
+                command
+                    .stdin(Stdio::from_raw_fd(slave_stdin.as_raw_fd()))
+                    .stdout(Stdio::from_raw_fd(slave_stdout.as_raw_fd()))
+                    .stderr(Stdio::from_raw_fd(slave_stderr.as_raw_fd()))
+                    .env("COLUMNS", "")
+                    .env("LINES", "")
+                    .env("TERM", "xterm-256color")
+                    .pre_exec(before_exec)
+                    .spawn()?
+            };
+            forget(slave_stdin);
+            forget(slave_stdout);
+            forget(slave_stderr);
+            child
+        };
+
+        let pid = Pid::from_child(&child);
+        let cancel_success = Arc::new(AtomicBool::new(false));
+        let extract_success = Arc::new(AtomicBool::new(false));
+        let extract_success_clone = extract_success.clone();
+        let cancel_success_clone = cancel_success.clone();
+        let cancel_signal_clone = self.cancel.clone();
+
+        thread::spawn(move || -> Result<()> {
+            loop {
+                if extract_success_clone.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+
+                if cancel_signal_clone.load(Ordering::SeqCst) {
+                    kill_process(pid, Signal::Term)?;
+                    debug!("Canceled");
+                    cancel_success_clone.store(true, Ordering::SeqCst);
+                    cancel_signal_clone.store(false, Ordering::SeqCst);
+                    return Ok(());
+                }
+                thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+
+        let master = unsafe { File::from_raw_fd(master_fd) };
+        match handle(master, callback) {
+            Ok(()) => (),
+            Err(err) => match err.raw_os_error() {
+                // EIO happens when slave end is closed
+                Some(libc::EIO) => (),
+                // Log other errors, use status code below to return
+                _ => error!("handle error: {}", err),
+            },
+        }
+
+        let cw = child.wait();
+        let is_success = child.wait().map(|x| x.success()).unwrap_or(false);
+        extract_success.store(is_success, Ordering::SeqCst);
+
+        if is_success || cancel_success.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::Other,
+                format!("archive extraction failed with status: {}", cw?),
+            ))
+        }
     }
 }
 
 #[cfg(test)]
 pub mod test {
-    use std::{
-        env::temp_dir,
-        fs,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        },
-        thread,
-        time::Duration,
-    };
+    use std::{env::temp_dir, fs, thread, time::Duration};
+
+    use crate::Unsquashfs;
 
     #[test]
     fn test_extract() {
-        let cancel = Arc::new(AtomicBool::from(false));
-        let cc = cancel.clone();
+        let unsquashfs = Unsquashfs::default();
+        let unsquashfs_clone = unsquashfs.clone();
+
         thread::spawn(move || {
             let output = temp_dir().join("unsqfs-wrap-test-extract");
             fs::create_dir_all(&output).unwrap();
-            crate::extract(
-                "testdata/test_extract.squashfs",
-                &output,
-                None,
-                move |c| {
+            unsquashfs
+                .extract("testdata/test_extract.squashfs", &output, None, move |c| {
                     dbg!(c);
-                },
-                cc,
-            )
-            .unwrap();
+                })
+                .unwrap();
             fs::remove_dir_all(output).unwrap();
         });
 
         thread::sleep(Duration::from_secs(1));
-        cancel.store(true, Ordering::Relaxed);
+        unsquashfs_clone.cancel();
     }
 }
