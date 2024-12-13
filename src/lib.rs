@@ -239,6 +239,8 @@ impl Unsquashfs {
 
             if self.cancel.load(Ordering::SeqCst) {
                 child.kill()?;
+                self.cancel.store(false, Ordering::SeqCst);
+                *self.status.write().unwrap() = Status::Pending;
                 return Ok(());
             }
 
@@ -246,6 +248,8 @@ impl Unsquashfs {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             };
+
+            *self.status.write().unwrap() = Status::Pending;
 
             if !wait.success() {
                 return Err(Error::new(
