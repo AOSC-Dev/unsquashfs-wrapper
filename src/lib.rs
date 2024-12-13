@@ -136,7 +136,6 @@ impl Unsquashfs {
             .env("TERM", "xterm-256color")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // .pre_exec(before_exec)
             .spawn(&pty.pts().map_err(|e| io::Error::new(ErrorKind::Other, e))?)
             .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
 
