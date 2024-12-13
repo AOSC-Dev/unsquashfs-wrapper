@@ -129,7 +129,9 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
 }
 
 /// Extracts an image using either unsquashfs.
-/// ```rust
+/// ```rust,no_run
+/// use std::sync::Arc;
+/// use std::sync::atomic::AtomicBool;
 /// fn main() {
 ///     unsquashfs_wrapper::extract(
 ///         "/home/saki/aosc-os_base_20230322_amd64.squashfs",
@@ -138,6 +140,7 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
 ///         move |c| {
 ///             dbg!(c);
 ///         },
+///         Arc::new(AtomicBool::new(false)),
 ///     )
 ///     .unwrap();
 ///}
