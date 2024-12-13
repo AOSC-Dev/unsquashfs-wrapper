@@ -1,12 +1,7 @@
 use std::{
-    fs::File,
     io::{self, Error, ErrorKind, Read, Result},
-    os::unix::{
-        io::{AsRawFd, FromRawFd, RawFd},
-        process::CommandExt,
-    },
     path::Path,
-    process::{Command, Stdio},
+    process::{ChildStdout, Stdio},
     str,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,95 +11,9 @@ use std::{
     time::Duration,
 };
 
-use tracing::debug;
+use pty_process::{blocking::Pty, Size};
 
-fn getpty(columns: u32, lines: u32) -> (RawFd, String) {
-    use std::{
-        ffi::CStr,
-        fs::OpenOptions,
-        io,
-        os::unix::{fs::OpenOptionsExt, io::IntoRawFd},
-    };
-
-    extern "C" {
-        fn ptsname(fd: libc::c_int) -> *const libc::c_char;
-        fn grantpt(fd: libc::c_int) -> libc::c_int;
-        fn unlockpt(fd: libc::c_int) -> libc::c_int;
-    }
-
-    let master_fd = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_CLOEXEC)
-        .open("/dev/ptmx")
-        .unwrap()
-        .into_raw_fd();
-    unsafe {
-        if grantpt(master_fd) < 0 {
-            panic!("grantpt: {:?}", Error::last_os_error());
-        }
-        if unlockpt(master_fd) < 0 {
-            panic!("unlockpt: {:?}", Error::last_os_error());
-        }
-    }
-
-    unsafe {
-        let size = libc::winsize {
-            ws_row: lines as libc::c_ushort,
-            ws_col: columns as libc::c_ushort,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        if libc::ioctl(master_fd, libc::TIOCSWINSZ, &size as *const libc::winsize) < 0 {
-            panic!("ioctl: {:?}", io::Error::last_os_error());
-        }
-    }
-
-    let tty_path = unsafe {
-        CStr::from_ptr(ptsname(master_fd))
-            .to_string_lossy()
-            .into_owned()
-    };
-    (master_fd, tty_path)
-}
-
-fn slave_stdio(tty_path: &str) -> Result<(File, File, File)> {
-    use libc::{O_CLOEXEC, O_RDONLY, O_WRONLY};
-    use std::ffi::CString;
-
-    let cvt = |res: i32| -> Result<i32> {
-        if res < 0 {
-            Err(Error::last_os_error())
-        } else {
-            Ok(res)
-        }
-    };
-
-    let tty_c = CString::new(tty_path).unwrap();
-    let stdin =
-        unsafe { File::from_raw_fd(cvt(libc::open(tty_c.as_ptr(), O_CLOEXEC | O_RDONLY))?) };
-    let stdout =
-        unsafe { File::from_raw_fd(cvt(libc::open(tty_c.as_ptr(), O_CLOEXEC | O_WRONLY))?) };
-    let stderr =
-        unsafe { File::from_raw_fd(cvt(libc::open(tty_c.as_ptr(), O_CLOEXEC | O_WRONLY))?) };
-
-    Ok((stdin, stdout, stderr))
-}
-
-fn before_exec() -> Result<()> {
-    unsafe {
-        if libc::setsid() < 0 {
-            panic!("setsid: {:?}", Error::last_os_error());
-        }
-        if libc::ioctl(0, libc::TIOCSCTTY, 1) < 0 {
-            panic!("ioctl: {:?}", Error::last_os_error());
-        }
-    }
-
-    Ok(())
-}
-
-fn handle(mut master: File, mut callback: impl FnMut(i32)) -> Result<String> {
+fn handle(mut master: ChildStdout, mut callback: impl FnMut(i32)) -> Result<String> {
     let mut last_progress = 0;
     let mut output = String::new();
     loop {
@@ -204,7 +113,11 @@ impl Unsquashfs {
             .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid archive path"))?
             .replace('\'', "'\"'\"'");
 
-        let mut command = Command::new("unsquashfs");
+        let pty = Pty::new().map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+        pty.resize(Size::new(30, 80))
+            .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+
+        let mut command = pty_process::blocking::Command::new("unsquashfs");
 
         if let Some(limit_thread) = thread {
             command.arg("-p").arg(limit_thread.to_string());
@@ -217,30 +130,25 @@ impl Unsquashfs {
             .arg(directory)
             .arg(archive);
 
-        debug!("{:?}", command);
+        let mut child = command
+            .env("COLUMNS", "")
+            .env("LINES", "")
+            .env("TERM", "xterm-256color")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            // .pre_exec(before_exec)
+            .spawn(&pty.pts().map_err(|e| io::Error::new(ErrorKind::Other, e))?)
+            .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
 
-        let (master_fd, tty_path) = getpty(80, 30);
-        let mut child = {
-            let (slave_stdin, slave_stdout, slave_stderr) = slave_stdio(&tty_path)?;
-
-            let child = unsafe {
-                command
-                    .stdin(Stdio::from_raw_fd(slave_stdin.as_raw_fd()))
-                    .stdout(Stdio::from_raw_fd(slave_stdout.as_raw_fd()))
-                    .stderr(Stdio::from_raw_fd(slave_stderr.as_raw_fd()))
-                    .env("COLUMNS", "")
-                    .env("LINES", "")
-                    .env("TERM", "xterm-256color")
-                    .pre_exec(before_exec)
-                    .spawn()?
-            };
-
-            *self.status.write().unwrap() = Status::Working;
-            child
-        };
+        *self.status.write().unwrap() = Status::Working;
 
         let cc = self.cancel.clone();
         let status_clone = self.status.clone();
+
+        let stdout = child.stdout.take().ok_or(io::Error::new(
+            ErrorKind::BrokenPipe,
+            "Failed to get stdout",
+        ))?;
 
         let process_control = thread::spawn(move || -> Result<()> {
             loop {
@@ -274,8 +182,7 @@ impl Unsquashfs {
             }
         });
 
-        let master = unsafe { File::from_raw_fd(master_fd) };
-        let output = handle(master, callback)?;
+        let output = handle(stdout, callback)?;
 
         process_control
             .join()
@@ -297,7 +204,7 @@ pub mod test {
         let unsquashfs = Unsquashfs::default();
         let unsquashfs_clone = unsquashfs.clone();
 
-        thread::spawn(move || {
+        let t = thread::spawn(move || {
             let output = temp_dir().join("unsqfs-wrap-test-extract");
             fs::create_dir_all(&output).unwrap();
             unsquashfs
@@ -313,7 +220,9 @@ pub mod test {
             fs::remove_dir_all(output).unwrap();
         });
 
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(10));
         unsquashfs_clone.cancel().unwrap();
+
+        t.join().unwrap();
     }
 }
