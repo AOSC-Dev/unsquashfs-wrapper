@@ -13,7 +13,8 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
     },
-    thread, time::Duration,
+    thread,
+    time::Duration,
 };
 
 use tracing::{debug, error};
@@ -134,7 +135,6 @@ pub struct Unsquashfs {
     status: Arc<RwLock<Status>>,
 }
 
-
 pub enum Status {
     Pending,
     Working,
@@ -217,6 +217,9 @@ impl Unsquashfs {
                     .pre_exec(before_exec)
                     .spawn()?
             };
+
+            *self.status.write().unwrap() = Status::Working;
+
             forget(slave_stdin);
             forget(slave_stdout);
             forget(slave_stderr);
@@ -254,10 +257,13 @@ impl Unsquashfs {
             if !wait.success() {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("archive extraction failed with status: {}", wait.code().unwrap_or(1)),
+                    format!(
+                        "archive extraction failed with status: {}",
+                        wait.code().unwrap_or(1)
+                    ),
                 ));
             } else {
-                return Ok(())
+                return Ok(());
             }
         }
     }
