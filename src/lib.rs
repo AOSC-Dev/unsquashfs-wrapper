@@ -121,6 +121,9 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
                         if last_progress != progress {
                             callback(progress);
                             last_progress = progress;
+                            if progress == 100 {
+                                return Ok(());
+                            }
                         }
                     }
                 }
@@ -207,7 +210,7 @@ impl Unsquashfs {
         debug!("{:?}", command);
 
         let (master_fd, tty_path) = getpty(80, 30);
-        let mut child = {
+        let (mut child, slave_fds) = {
             let (slave_stdin, slave_stdout, slave_stderr) = slave_stdio(&tty_path)?;
 
             let child = unsafe {
@@ -221,10 +224,15 @@ impl Unsquashfs {
                     .pre_exec(before_exec)
                     .spawn()?
             };
+            let slave_fds = [
+                slave_stdin.as_raw_fd(),
+                slave_stdout.as_raw_fd(),
+                slave_stderr.as_raw_fd(),
+            ];
             forget(slave_stdin);
             forget(slave_stdout);
             forget(slave_stderr);
-            child
+            (child, slave_fds)
         };
 
         let pid = Pid::from_child(&child);
@@ -245,6 +253,12 @@ impl Unsquashfs {
                     debug!("Canceled");
                     cancel_success_clone.store(true, Ordering::SeqCst);
                     cancel_signal_clone.store(false, Ordering::SeqCst);
+                    // close the slave stdio descriptors so that pty handler can return
+                    for fd in slave_fds {
+                        unsafe {
+                            libc::close(fd);
+                        }
+                    }
                     return Ok(());
                 }
                 thread::sleep(std::time::Duration::from_millis(100));
