@@ -242,3 +242,41 @@ pub fn extract<P: AsRef<Path>, Q: AsRef<Path>, F: FnMut(i32)>(
         ))
     }
 }
+
+#[cfg(test)]
+pub mod test {
+    use std::{
+        env::temp_dir,
+        fs,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread,
+        time::Duration,
+    };
+
+    #[test]
+    fn test_extract() {
+        let cancel = Arc::new(AtomicBool::from(false));
+        let cc = cancel.clone();
+        thread::spawn(move || {
+            let output = temp_dir().join("unsqfs-wrap-test-extract");
+            fs::create_dir_all(&output).unwrap();
+            crate::extract(
+                "testdata/test_extract.squashfs",
+                &output,
+                None,
+                move |c| {
+                    dbg!(c);
+                },
+                cc,
+            )
+            .unwrap();
+            fs::remove_dir_all(output).unwrap();
+        });
+
+        thread::sleep(Duration::from_secs(1));
+        cancel.store(true, Ordering::Relaxed);
+    }
+}
