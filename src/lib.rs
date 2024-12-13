@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{Error, ErrorKind, Read, Result},
+    io::{self, Error, ErrorKind, Read, Result},
     mem::forget,
     os::unix::{
         io::{AsRawFd, FromRawFd, RawFd},
@@ -11,12 +11,11 @@ use std::{
     str,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, RwLock,
     },
-    thread,
+    thread, time::Duration,
 };
 
-use rustix::process::{kill_process, Pid, Signal};
 use tracing::{debug, error};
 
 fn getpty(columns: u32, lines: u32) -> (RawFd, String) {
@@ -132,12 +131,20 @@ fn handle<F: FnMut(i32)>(mut master: File, mut callback: F) -> Result<()> {
 #[derive(Clone)]
 pub struct Unsquashfs {
     cancel: Arc<AtomicBool>,
+    status: Arc<RwLock<Status>>,
+}
+
+
+pub enum Status {
+    Pending,
+    Working,
 }
 
 impl Default for Unsquashfs {
     fn default() -> Self {
         Self {
             cancel: Arc::new(AtomicBool::new(false)),
+            status: Arc::new(RwLock::new(Status::Pending)),
         }
     }
 }
@@ -147,28 +154,17 @@ impl Unsquashfs {
         Unsquashfs::default()
     }
 
-    pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::SeqCst);
+    pub fn cancel(&self) -> Result<()> {
+        match *self.status.read().unwrap() {
+            Status::Pending => Err(io::Error::new(ErrorKind::Other, "Unsquashfs is not start.")),
+            Status::Working => {
+                self.cancel.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        }
     }
 
     /// Extracts an image using either unsquashfs.
-    /// ```rust,no_run
-    ///     let unsquashfs = Unsquashfs::new();
-    /// let unsquashfs_clone = unsquashfs.clone();
-    /// thread::spawn(move || {
-    ///     unsquashfs.extract(
-    ///         "/home/saki/aosc-os_base_20240215_amd64.squashfs",
-    ///         "/test",
-    ///         None,
-    ///         move |c| {
-    ///             dbg!(c);
-    ///         },
-    ///     )
-    ///     .unwrap();
-    /// });
-    // thread::sleep(Duration::from_secs(10));
-    // unsquashfs_clone.cancel();
-    /// ```
     pub fn extract(
         &self,
         archive: impl AsRef<Path>,
@@ -227,30 +223,6 @@ impl Unsquashfs {
             child
         };
 
-        let pid = Pid::from_child(&child);
-        let cancel_success = Arc::new(AtomicBool::new(false));
-        let extract_success = Arc::new(AtomicBool::new(false));
-        let extract_success_clone = extract_success.clone();
-        let cancel_success_clone = cancel_success.clone();
-        let cancel_signal_clone = self.cancel.clone();
-
-        thread::spawn(move || -> Result<()> {
-            loop {
-                if extract_success_clone.load(Ordering::SeqCst) {
-                    return Ok(());
-                }
-
-                if cancel_signal_clone.load(Ordering::SeqCst) {
-                    kill_process(pid, Signal::Term)?;
-                    debug!("Canceled");
-                    cancel_success_clone.store(true, Ordering::SeqCst);
-                    cancel_signal_clone.store(false, Ordering::SeqCst);
-                    return Ok(());
-                }
-                thread::sleep(std::time::Duration::from_millis(100));
-            }
-        });
-
         let master = unsafe { File::from_raw_fd(master_fd) };
         match handle(master, callback) {
             Ok(()) => (),
@@ -262,17 +234,27 @@ impl Unsquashfs {
             },
         }
 
-        let cw = child.wait();
-        let is_success = child.wait().map(|x| x.success()).unwrap_or(false);
-        extract_success.store(is_success, Ordering::SeqCst);
+        loop {
+            let wait = child.try_wait()?;
 
-        if is_success || cancel_success.load(Ordering::SeqCst) {
-            Ok(())
-        } else {
-            Err(Error::new(
-                ErrorKind::Other,
-                format!("archive extraction failed with status: {}", cw?),
-            ))
+            if self.cancel.load(Ordering::SeqCst) {
+                child.kill()?;
+                return Ok(());
+            }
+
+            let Some(wait) = wait else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+
+            if !wait.success() {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("archive extraction failed with status: {}", wait.code().unwrap_or(1)),
+                ));
+            } else {
+                return Ok(())
+            }
         }
     }
 }
@@ -300,6 +282,6 @@ pub mod test {
         });
 
         thread::sleep(Duration::from_secs(1));
-        unsquashfs_clone.cancel();
+        unsquashfs_clone.cancel().unwrap();
     }
 }

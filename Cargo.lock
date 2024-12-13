@@ -141,7 +141,6 @@ name = "unsquashfs-wrapper"
 version = "0.2.2"
 dependencies = [
  "libc",
- "rustix",
  "tracing",
  "which",
 ]
