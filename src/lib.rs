@@ -1,7 +1,8 @@
 use std::{
-    io::{self, BufRead, BufReader, Error, ErrorKind},
+    io::{self, BufReader, Error, ErrorKind, Read},
     path::Path,
     process::{ChildStdout, Stdio},
+    str,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
@@ -16,28 +17,32 @@ use pty_process::{
 };
 use thiserror::Error;
 
-fn handle(stdout: ChildStdout, mut callback: impl FnMut(i32)) -> io::Result<String> {
+fn handle(stdout: ChildStdout, mut callback: impl FnMut(i32)) -> io::Result<()> {
     let mut last_progress = 0;
-    let mut output = String::new();
-    let reader = BufReader::new(stdout);
+    let mut reader = BufReader::new(stdout);
 
-    for line in reader.lines() {
-        let line = line?;
-        let len = line.len();
-        if line.starts_with('[') && line.ends_with('%') && len >= 4 {
-            if let Ok(progress) = line[len - 4..len - 1].trim().parse::<i32>() {
-                if last_progress != progress {
-                    callback(progress);
-                    last_progress = progress;
+    loop {
+        let mut data = [0; 0x1000];
+        let count = reader.read(&mut data)?;
+
+        if count == 0 {
+            return Ok(());
+        }
+
+        if let Ok(string) = str::from_utf8(&data[..count]) {
+            for line in string.split(['\r', '\n']) {
+                let len = line.len();
+                if line.starts_with('[') && line.ends_with('%') && len >= 4 {
+                    if let Ok(progress) = line[len - 4..len - 1].trim().parse::<i32>() {
+                        if last_progress != progress {
+                            callback(progress);
+                            last_progress = progress;
+                        }
+                    }
                 }
             }
-        } else if len != 0 {
-            output.push_str(&line);
-            output.push('\n');
         }
     }
-
-    Ok(output)
 }
 
 #[derive(Clone)]
@@ -135,6 +140,7 @@ impl Unsquashfs {
             .env("LINES", "")
             .env("TERM", "xterm-256color")
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn(&pty.pts()?)?;
 
         *self.status.write().unwrap() = Status::Working;
@@ -146,6 +152,11 @@ impl Unsquashfs {
             .stdout
             .take()
             .ok_or_else(|| io::Error::new(ErrorKind::BrokenPipe, "Failed to get stdout"))?;
+
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::new(ErrorKind::BrokenPipe, "Failed to get stderr"))?;
 
         let process_control = thread::spawn(move || -> io::Result<()> {
             loop {
@@ -179,12 +190,16 @@ impl Unsquashfs {
             }
         });
 
-        let output = handle(stdout, callback)?;
+        handle(stdout, callback)?;
+
+        let mut stderr = BufReader::new(stderr);
+        let mut buf = String::new();
+        stderr.read_to_string(&mut buf).ok();
 
         process_control
             .join()
             .unwrap()
-            .map_err(|e| UnsquashfsError::Failure(e, output))?;
+            .map_err(|e| UnsquashfsError::Failure(e, buf))?;
 
         Ok(())
     }
