@@ -11,5 +11,4 @@ edition = "2021"
 
 [dependencies]
 which = "7.0"
-pty-process = "0.4"
 thiserror = "2"

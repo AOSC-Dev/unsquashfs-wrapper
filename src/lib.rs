@@ -1,7 +1,7 @@
 use std::{
     io::{self, BufReader, Error, ErrorKind, Read},
     path::Path,
-    process::{ChildStdout, Stdio},
+    process::{ChildStdout, Command, Stdio},
     str,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,10 +11,6 @@ use std::{
     time::Duration,
 };
 
-use pty_process::{
-    blocking::{Command, Pty},
-    Size,
-};
 use thiserror::Error;
 
 fn handle(stdout: ChildStdout, mut callback: impl FnMut(i32)) -> io::Result<()> {
@@ -71,8 +67,6 @@ pub enum UnsquashfsError {
     BinaryDoesNotExist,
     #[error(transparent)]
     IO(#[from] io::Error),
-    #[error(transparent)]
-    Pty(#[from] pty_process::Error),
     #[error("`unsquashfs` is not start.")]
     Pending,
     #[error("`unsquashfs` failed: {0}, output: {1}")]
@@ -119,9 +113,6 @@ impl Unsquashfs {
             .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Invalid archive path"))?
             .replace('\'', "'\"'\"'");
 
-        let pty = Pty::new()?;
-        pty.resize(Size::new(30, 80))?;
-
         let mut command = Command::new("unsquashfs");
 
         if let Some(limit_thread) = thread {
@@ -141,7 +132,7 @@ impl Unsquashfs {
             .env("TERM", "xterm-256color")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn(&pty.pts()?)?;
+            .spawn()?;
 
         *self.status.write().unwrap() = Status::Working;
 
