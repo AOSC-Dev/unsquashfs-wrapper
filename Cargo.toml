@@ -1,6 +1,6 @@
 [package]
 name = "unsquashfs-wrapper"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Jeremy Soller <jackpot51@gmail.com>", "Michael Aaron Murphy <mmstickman@gmail.com>", "eatradish <sakiiily@aosc.io>"]
 description = "Extract a squashfs image with progress callback support"
 repository = "https://github.com/AOSC-Dev/distinst-squashfs"
